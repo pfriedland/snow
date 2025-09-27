@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 5000
 
 # Step 6: Define environment variable for Flask
-ENV FLASK_APP=app.py
+ENV FLASK_APP=forecast-service.py
 
 # Step 7: Run the application when the container starts
 CMD ["flask", "run", "--host=0.0.0.0"]

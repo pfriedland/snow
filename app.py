@@ -1,50 +1,63 @@
-from flask import Flask, request, jsonify
-from shapely.geometry import shape, Point
+"""Minimal Flask endpoint for matching GeoJSON geometries by coordinate."""
+
 import json
+
+from flask import Flask, Response, request
+from shapely.geometry import shape, Point
 
 app = Flask(__name__)
 
-# Route to accept GeoJSON and return matching geometries based on lon/lat
+
 @app.route('/get-geometries', methods=['POST'])
 def get_geometries():
+    """Return any GeoJSON geometries that contain or intersect the provided point."""
     try:
-        data = request.json
-
-        # Extract geoJSON and lon/lat from the request body
+        data = request.json or {}
         geojson = data.get('geojson', None)
         lon = data.get('lon', None)
         lat = data.get('lat', None)
 
         if not geojson or lon is None or lat is None:
-            return jsonify({"error": "Missing geoJSON or lon/lat"}), 400
+            payload = {"error": "Missing geoJSON or lon/lat"}
+            return Response(
+                json.dumps(payload, indent=2, default=str),
+                status=400,
+                mimetype="application/json",
+            )
 
-        # Convert lon/lat to a Shapely Point object
         point = Point(lon, lat)
-
-        # Store matching geometries
         matching_geometries = []
 
-        # Iterate through GeoJSON features
         for feature in geojson.get('features', []):
             geometry = feature.get('geometry', None)
+            if not geometry:
+                continue
 
-            # Check if geometry exists
-            if geometry:
-                # Create a shapely geometry from the feature's geometry
-                geom_shape = shape(geometry)
+            geom_shape = shape(geometry)
+            if geom_shape.contains(point) or geom_shape.intersects(point):
+                matching_geometries.append(geometry)
 
-                # Check if the point is within the geometry
-                if geom_shape.contains(point) or geom_shape.intersects(point):
-                    matching_geometries.append(geometry)
-
-        # Return matched geometries or message if none were found
         if matching_geometries:
-            return jsonify({"matching_geometries": matching_geometries}), 200
+            payload = {"matching_geometries": matching_geometries}
+            status = 200
         else:
-            return jsonify({"message": "No geometries found for the given location."}), 404
+            payload = {"message": "No geometries found for the given location."}
+            status = 404
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return Response(
+            json.dumps(payload, indent=2, default=str),
+            status=status,
+            mimetype="application/json",
+        )
+
+    except Exception as e:  # pragma: no cover - defensive catch for unexpected errors
+        payload = {"error": str(e)}
+        return Response(
+            json.dumps(payload, indent=2, default=str),
+            status=500,
+            mimetype="application/json",
+        )
+
 
 if __name__ == '__main__':
     app.run(debug=True)
