@@ -3,7 +3,7 @@
 This repository bundles two Flask-based microservices:
 
 - **Forecast service** (`forecast-service.py`): pulls hourly forecast data from the US National Weather Service (NOAA) and simplifies it with hail and snow insights.
-- **GeoJSON service** (`app.py` / `geojson-service.py`): accepts GeoJSON FeatureCollections and returns geometries that intersect a point.
+- **GeoJSON service** (`geojson-service.py`): accepts GeoJSON FeatureCollections and returns geometries that intersect a point.
 
 The code is container-friendly (Dockerfile, docker-compose) and stays dependency-light (`Flask`, `requests`, `shapely`).
 
@@ -22,7 +22,7 @@ Run a service (auto reload via `FLASK_ENV=development` is already provided in `d
 ```bash
 FLASK_APP=forecast-service.py flask run
 # or
-FLASK_APP=app.py flask run
+FLASK_APP=geojson-service.py flask run
 ```
 
 Docker option:
@@ -119,7 +119,7 @@ Lists geometries whose polygon/line contain or intersect the point. If none matc
 
 ### GeoJSON Happy Path
 
-1. `POST /get-geometries` lands in `app.py` (or `geojson-service.py`), validating the GeoJSON body and target coordinate.
+1. `POST /get-geometries` lands in `geojson-service.py`, validating the GeoJSON body and target coordinate.
 2. `GeoJSONProcessor` iterates each feature with Shapely, collecting geometries that contain or intersect the point.
 3. The Flask handler serializes the matches (or a not-found message) to JSON and responds with the appropriate status code.
 
@@ -128,7 +128,16 @@ Lists geometries whose polygon/line contain or intersect the point. If none matc
 - `geojson-processor.py` encapsulates Shapely point-in-polygon matching.
 - `snow-flask-app.tar` is an archival artifact; not required for day-to-day development.
 
-Tests are not provided; use manual curl requests or the built-in Flask test client. Example with the forecast service:
+You can also exercise the Flask apps manually via curl or the built-in test client. Example with the forecast service:
+
+### Automated Tests
+
+Unit tests cover key forecast and GeoJSON behaviors. Run them with `pytest`:
+
+```bash
+pytest
+```
+
 
 ```python
 from forecast_service import app

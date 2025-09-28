@@ -1,0 +1,69 @@
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "forecast_service.py"
+MODULE_SPEC = importlib.util.spec_from_file_location("forecast_service_module", MODULE_PATH)
+forecast_service = importlib.util.module_from_spec(MODULE_SPEC)
+MODULE_SPEC.loader.exec_module(forecast_service)
+
+
+class DummyExtractor:
+    def __init__(self, plant, lon, lat):
+        self.plant = plant
+        self.lon = lon
+        self.lat = lat
+        self.called = True
+
+    def get_forecast(self):
+        return {
+            "plant": self.plant,
+            "coordinates": {"longitude": self.lon, "latitude": self.lat},
+            "forecast_source": "https://example.com/forecast",
+            "forecast": {"Temperature": 72},
+        }
+
+
+class ErrorExtractor(DummyExtractor):
+    def get_forecast(self):
+        raise RuntimeError("boom")
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setattr(forecast_service, "ForecastExtractor", DummyExtractor)
+    return forecast_service.app.test_client()
+
+
+def test_get_forecast_success(client):
+    response = client.get(
+        "/get-forecast",
+        query_string={"plant-prefix": "Test", "longitude": -90.0, "latitude": 45.0},
+    )
+
+    assert response.status_code == 200
+    body = json.loads(response.data)
+    assert body["plant"] == "Test"
+    assert body["forecast"]["Temperature"] == 72
+
+
+def test_get_forecast_missing_params_returns_400(client):
+    response = client.get("/get-forecast", query_string={"plant-prefix": "Test"})
+
+    assert response.status_code == 400
+    assert "Missing required parameters" in response.get_data(as_text=True)
+
+
+def test_get_forecast_handles_exceptions(monkeypatch):
+    monkeypatch.setattr(forecast_service, "ForecastExtractor", ErrorExtractor)
+    client = forecast_service.app.test_client()
+
+    response = client.get(
+        "/get-forecast",
+        query_string={"plant-prefix": "Test", "longitude": -90.0, "latitude": 45.0},
+    )
+
+    assert response.status_code == 500
+    assert "An error occurred" in response.get_data(as_text=True)
