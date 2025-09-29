@@ -1,6 +1,7 @@
 """Transform NOAA forecast payloads into a compact structure for clients."""
 
 import json
+import re
 from datetime import datetime, timezone
 
 MM_PER_INCH = 25.4
@@ -9,12 +10,24 @@ MM_PER_INCH = 25.4
 class WeatherDataSimplifier:
     """Condense raw hourly forecast data into a hail/snow-aware snapshot."""
 
-    def __init__(self, weather_data, hail_in_forecast=False, snow_in_forecast=False, snow_accumulation_inches=None):
+    def __init__(
+        self,
+        weather_data,
+        hail_in_forecast=False,
+        snow_in_forecast=False,
+        snow_accumulation_inches=None,
+        sky_cover_percent=None,
+        wind_gust_mph=None,
+        wind_direction_degrees=None,
+    ):
         """Store the forecast payload and hazard metadata for later use."""
         self.weather_data = weather_data
         self.hail_in_forecast = hail_in_forecast
         self.snow_in_forecast = snow_in_forecast
         self.snow_accumulation_inches = snow_accumulation_inches
+        self.sky_cover_percent = sky_cover_percent
+        self.wind_gust_mph = wind_gust_mph
+        self.wind_direction_override = wind_direction_degrees
 
     def celsius_to_fahrenheit(self, celsius):
         """Convert a temperature value from Celsius to Fahrenheit."""
@@ -56,6 +69,22 @@ class WeatherDataSimplifier:
         if snow_inches is None:
             snow_inches = self._snowfall_to_inches(current_period.get('snowfallAmount'))
 
+        sky_cover_percent = self.sky_cover_percent
+        if sky_cover_percent is None:
+            sky_cover_percent = self._value_or_none(
+                current_period.get('skyCover', {}).get('value')
+                if isinstance(current_period.get('skyCover'), dict)
+                else current_period.get('skyCover')
+            )
+
+        gust_mph = self._parse_speed(current_period.get('windGust'))
+        if gust_mph is None and self.wind_gust_mph is not None:
+            gust_mph = self.wind_gust_mph
+
+        wind_direction_degrees = self.wind_direction_override
+        if wind_direction_degrees is None:
+            wind_direction_degrees = self._resolve_wind_direction(current_period.get('windDirection'))
+
         simplified_data = {
             "Temperature": current_period['temperature'],
             "TemperatureUnit": current_period['temperatureUnit'],
@@ -63,12 +92,19 @@ class WeatherDataSimplifier:
             "DewpointUnit": "F",
             "RelativeHumidity": current_period['relativeHumidity']['value'],
             "WindSpeed": current_period['windSpeed'],
-            "WindDirectionDegrees": self.wind_direction_to_degrees(current_period['windDirection']),
+            "WindDirectionDegrees": wind_direction_degrees,
             "ProbabilityOfPrecipitation": current_period['probabilityOfPrecipitation']['value'],
             "ForecastTimestamp": forecast_timestamp,
             "Hail": self.hail_in_forecast,
             "Snow": self.snow_in_forecast,
-            "SnowAccumulationInches": self._round_inches(snow_inches),
+            "SnowAccumulationInches": self._round_value(snow_inches),
+            "WindSpeedMph": self._parse_speed(current_period.get('windSpeed')),
+            "WindGustMph": gust_mph,
+            "PrecipitationPercent": self._value_or_none(current_period.get('probabilityOfPrecipitation', {}).get('value')),
+            "SnowMillimeters": self._round_value(self._snow_inches_to_mm(snow_inches)),
+            "SkyCoverPercent": self._value_or_none(sky_cover_percent),
+            "HailPercent": None,
+            "SignificantHailPercent": None,
         }
 
         return simplified_data
@@ -97,8 +133,45 @@ class WeatherDataSimplifier:
                 return value
         return value if snowfall_section.get('unitCode') == 'inches' else None
 
-    def _round_inches(self, inches):
-        """Round snowfall inches to two decimals, preserving missing data."""
+    def _resolve_wind_direction(self, direction):
+        """Return degrees for a wind direction token or numeric value."""
+        if direction is None:
+            return None
+        if isinstance(direction, (int, float)):
+            return float(direction)
+        if isinstance(direction, str):
+            token = direction.strip()
+            try:
+                return float(token)
+            except ValueError:
+                return self.wind_direction_to_degrees(token)
+        return None
+
+    def _round_value(self, value):
+        if value is None:
+            return None
+        return round(value, 2)
+
+    def _parse_speed(self, value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            matches = re.findall(r"[0-9]+\.?[0-9]*", value)
+            if matches:
+                numbers = [float(m) for m in matches]
+                max_value = max(numbers)
+                if "km" in value.lower():
+                    return max_value * 0.621371
+                return max_value
+        return None
+
+    def _snow_inches_to_mm(self, inches):
         if inches is None:
             return None
-        return round(inches, 2)
+        mm = inches * MM_PER_INCH
+        return mm
+
+    def _value_or_none(self, value):
+        return value if value is not None else None

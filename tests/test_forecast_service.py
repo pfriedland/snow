@@ -21,8 +21,18 @@ class DummyExtractor:
         return {
             "plant": self.plant,
             "coordinates": {"longitude": self.lon, "latitude": self.lat},
+            "location": {"city": "Test City", "state": "TS", "country": "US"},
             "forecast_source": "https://example.com/forecast",
-            "forecast": {"Temperature": 72},
+            "forecast": {
+                "Temperature": 72,
+                "WindSpeedMph": 10,
+                "WindGustMph": 15,
+                "SnowMillimeters": 0,
+                "SkyCoverPercent": 50,
+                "PrecipitationPercent": 20,
+                "HailPercent": None,
+                "SignificantHailPercent": None,
+            },
         }
 
 
@@ -47,13 +57,19 @@ def test_get_forecast_success(client):
     body = json.loads(response.data)
     assert body["plant"] == "Test"
     assert body["forecast"]["Temperature"] == 72
+    assert body["location"]["city"] == "Test City"
+    assert body["forecast"]["SkyCoverPercent"] == 50
+    assert body["forecast"]["SnowMillimeters"] == 0
+    assert body["http_status_code"] == 200
 
 
 def test_get_forecast_missing_params_returns_400(client):
     response = client.get("/get-forecast", query_string={"plant-prefix": "Test"})
 
     assert response.status_code == 400
-    assert "Missing required parameters" in response.get_data(as_text=True)
+    body = json.loads(response.data)
+    assert "Missing required parameters" in body["error"]
+    assert body["http_status_code"] == 400
 
 
 def test_get_forecast_handles_exceptions(monkeypatch):
@@ -66,4 +82,6 @@ def test_get_forecast_handles_exceptions(monkeypatch):
     )
 
     assert response.status_code == 500
-    assert "An error occurred" in response.get_data(as_text=True)
+    body = json.loads(response.data)
+    assert "An error occurred" in body["error"]
+    assert body["http_status_code"] == 500

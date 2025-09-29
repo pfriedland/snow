@@ -12,7 +12,7 @@ from requests import Session
 from forecast_transform import WeatherDataSimplifier
 
 # NOAA requires a descriptive User-Agent header for API requests.
-DEFAULT_USER_AGENT = "hail-forecast-service/1.0 (+https://example.com/contact)"
+DEFAULT_USER_AGENT = "snow-forecast-service/1.0 (+https://www.enel.com/)"
 MM_PER_INCH = 25.4
 
 logger = logging.getLogger(__name__)
@@ -110,44 +110,57 @@ class ForecastExtractor:
         except requests.RequestException as exc:
             raise RuntimeError("Failed to retrieve NOAA point metadata") from exc
 
-        forecast_url = self._extract_forecast_url(points_metadata)
-        try:
-            forecast_payload = self._fetch_forecast_payload(forecast_url)
-        except requests.RequestException as exc:
-            raise RuntimeError("Failed to retrieve NOAA forecast data") from exc
+        # forecast_url = self._extract_forecast_url(points_metadata)
+        # try:
+        #     forecast_payload = self._fetch_forecast_payload(forecast_url)
+        # except requests.RequestException as exc:
+        #     raise RuntimeError("Failed to retrieve NOAA forecast data") from exc
 
-        hail_expected = self._detect_hail(forecast_payload)
-        snow_expected = self._detect_snow(forecast_payload)
-        logger.debug(
-            "Hazard detection for plant=%s: hail=%s snow=%s",
-            self.plant_prefix,
-            hail_expected,
-            snow_expected,
-        )
+        # hail_expected = self._detect_hail(forecast_payload)
+        # snow_expected = self._detect_snow(forecast_payload)
+        # logger.debug(
+        #     "Hazard detection for plant=%s: hail=%s snow=%s",
+        #     self.plant_prefix,
+        #     hail_expected,
+        #     snow_expected,
+        # )
         snow_accum_inches = self._extract_snow_accumulation_inches(forecast_payload)
+        sky_cover_percent = None
+        wind_gust_mph = None
+        wind_direction_degrees = None
 
-        if snow_accum_inches is None:
-            grid_url = self._extract_grid_data_url(points_metadata)
-            if grid_url:
-                try:
-                    grid_payload = self._fetch_grid_payload(grid_url)
-                    snow_accum_inches = self._extract_snow_from_grid(grid_payload)
-                    if snow_accum_inches is not None:
-                        logger.debug(
-                            "Derived snow accumulation %.2f in from grid payload",
-                            snow_accum_inches,
-                        )
-                    else:
-                        logger.debug("Grid payload did not include snow accumulation values")
-                except requests.RequestException:
-                    snow_accum_inches = None
-                    logger.debug("Failed to fetch NOAA grid payload", exc_info=True)
+        grid_payload = None
+        grid_url = self._extract_grid_data_url(points_metadata)
+        if grid_url:
+            try:
+                grid_payload = self._fetch_grid_payload(grid_url)
+            except requests.RequestException:
+                grid_payload = None
+                logger.debug("Failed to fetch NOAA grid payload", exc_info=True)
+
+        if grid_payload:
+            if snow_accum_inches is None:
+                snow_accum_inches = self._extract_snow_from_grid(grid_payload)
+                if snow_accum_inches is not None:
+                    logger.debug(
+                        "Derived snow accumulation %.2f in from grid payload",
+                        snow_accum_inches,
+                    )
+                else:
+                    logger.debug("Grid payload did not include snow accumulation values")
+
+            sky_cover_percent = self._extract_sky_cover_from_grid(grid_payload)
+            wind_gust_mph = self._extract_wind_gust_from_grid(grid_payload)
+            wind_direction_degrees = self._extract_wind_direction_from_grid(grid_payload)
 
         simplifier = WeatherDataSimplifier(
             forecast_payload,
             hail_in_forecast=hail_expected,
             snow_in_forecast=snow_expected,
             snow_accumulation_inches=snow_accum_inches,
+            sky_cover_percent=sky_cover_percent,
+            wind_gust_mph=wind_gust_mph,
+            wind_direction_degrees=wind_direction_degrees,
         )
         simplified_forecast = simplifier.simplify_weather_data()
         logger.debug(
@@ -164,6 +177,7 @@ class ForecastExtractor:
                 "latitude": self.latitude,
                 "longitude": self.longitude,
             },
+            "location": self._extract_location(points_metadata),
             "forecast_source": forecast_url,
             "forecast": simplified_forecast,
         }
@@ -180,6 +194,22 @@ class ForecastExtractor:
         if not forecast_url:
             raise RuntimeError("NOAA point metadata does not include a forecast URL")
         return forecast_url
+
+    def _extract_location(self, metadata: Dict[str, Any]) -> Dict[str, Optional[str]]:
+        properties = metadata.get("properties", {})
+        relative = properties.get("relativeLocation", {}).get("properties", {})
+
+        city = relative.get("city")
+        state = relative.get("state")
+
+        # NOAA points are US-based. Include country when we have any locality context.
+        country = "US" if city or state else None
+
+        return {
+            "city": city,
+            "state": state,
+            "country": country,
+        }
 
     def _detect_hail(self, forecast_payload: Dict[str, Any]) -> bool:
         """Return True when any forecast period mentions hail."""
@@ -263,6 +293,62 @@ class ForecastExtractor:
             if inches is not None:
                 return inches
         return None
+
+    def _extract_sky_cover_from_grid(self, grid_payload: Dict[str, Any]) -> Optional[float]:
+        sky = grid_payload.get("properties", {}).get("skyCover")
+        if not isinstance(sky, dict):
+            return None
+        values = sky.get("values")
+        if not isinstance(values, list):
+            return None
+        for entry in values:
+            value = entry.get("value")
+            if value is not None:
+                return float(value)
+        return None
+
+    def _extract_wind_gust_from_grid(self, grid_payload: Dict[str, Any]) -> Optional[float]:
+        wind = grid_payload.get("properties", {}).get("windGust")
+        if not isinstance(wind, dict):
+            return None
+        values = wind.get("values")
+        if not isinstance(values, list):
+            return None
+        uom = wind.get("uom") or ""
+        for entry in values:
+            value = entry.get("value")
+            if value is None:
+                continue
+            return self._convert_speed_to_mph(value, uom)
+        return None
+
+    def _extract_wind_direction_from_grid(self, grid_payload: Dict[str, Any]) -> Optional[float]:
+        direction = grid_payload.get("properties", {}).get("windDirection")
+        if not isinstance(direction, dict):
+            return None
+        values = direction.get("values")
+        if not isinstance(values, list):
+            return None
+        for entry in values:
+            value = entry.get("value")
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _convert_speed_to_mph(self, value: float, unit_code: str) -> float:
+        code = (unit_code or "").lower()
+        if "km" in code:
+            return float(value) * 0.621371
+        if "m_s" in code or "ms-1" in code:
+            return float(value) * 2.23694
+        if "knot" in code or "kt" in code:
+            return float(value) * 1.15078
+        # Assume mph by default
+        return float(value)
 
     def _snowfall_section_to_inches(self, section: Optional[Dict[str, Any]]) -> Optional[float]:
         """Convert a snowfall dictionary to inches if units are supported."""

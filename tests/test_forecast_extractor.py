@@ -38,6 +38,12 @@ def point_metadata():
         "properties": {
             "forecastHourly": FORECAST_URL,
             "forecastGridData": GRID_URL,
+            "relativeLocation": {
+                "properties": {
+                    "city": "Stephen",
+                    "state": "MN",
+                }
+            },
         }
     }
 
@@ -69,14 +75,32 @@ def test_get_forecast_uses_hourly_snowfall(point_metadata):
                     now,
                     dewpoint={"value": -1.0},
                     snowfallAmount={"unitCode": "wmoUnit:mm", "value": 25.4},
+                    windGust="20 km/h",
                 )
             ]
+        }
+    }
+
+    grid_payload = {
+        "properties": {
+            "snowfallAmount": {
+                "uom": "wmoUnit:mm",
+                "values": [{"validTime": now.isoformat(), "value": 25.4}],
+            },
+            "skyCover": {
+                "values": [{"validTime": now.isoformat(), "value": 65}],
+            },
+            "windDirection": {
+                "uom": "wmoUnit:degree_(angle)",
+                "values": [{"validTime": now.isoformat(), "value": 340}],
+            },
         }
     }
 
     responses = {
         POINTS_URL: point_metadata,
         FORECAST_URL: forecast_payload,
+        GRID_URL: grid_payload,
     }
 
     extractor = ForecastExtractor(
@@ -94,6 +118,19 @@ def test_get_forecast_uses_hourly_snowfall(point_metadata):
     assert result["forecast"]["Temperature"] == 30
     assert result["forecast"]["Dewpoint"] == pytest.approx(30.2, rel=1e-3)
     assert result["forecast_source"] == FORECAST_URL
+    assert result["location"] == {
+        "city": "Stephen",
+        "state": "MN",
+        "country": "US",
+    }
+    assert result["forecast"]["WindSpeedMph"] == pytest.approx(10.0)
+    assert result["forecast"]["WindGustMph"] == pytest.approx(20 * 0.621371, rel=1e-6)
+    assert result["forecast"]["PrecipitationPercent"] == 70
+    assert result["forecast"]["SnowMillimeters"] == pytest.approx(25.4, rel=1e-6)
+    assert result["forecast"]["SkyCoverPercent"] == pytest.approx(65)
+    assert result["forecast"]["HailPercent"] is None
+    assert result["forecast"]["SignificantHailPercent"] is None
+    assert result["forecast"]["WindDirectionDegrees"] == pytest.approx(340)
 
 
 def test_get_forecast_falls_back_to_grid_data(point_metadata):
@@ -113,7 +150,18 @@ def test_get_forecast_falls_back_to_grid_data(point_metadata):
                 "values": [
                     {"validTime": now.isoformat(), "value": 12.7},
                 ],
-            }
+            },
+            "skyCover": {
+                "values": [{"validTime": now.isoformat(), "value": 45}],
+            },
+            "windGust": {
+                "uom": "wmoUnit:km_h-1",
+                "values": [{"validTime": now.isoformat(), "value": 30}],
+            },
+            "windDirection": {
+                "uom": "wmoUnit:degree_(angle)",
+                "values": [{"validTime": now.isoformat(), "value": 190}],
+            },
         }
     }
 
@@ -136,3 +184,8 @@ def test_get_forecast_falls_back_to_grid_data(point_metadata):
     assert result["forecast"]["Snow"] is False
     assert result["forecast"]["Hail"] is False
     assert GRID_URL in extractor.session.requested_urls
+    assert result["location"]["state"] == "MN"
+    assert result["forecast"]["SkyCoverPercent"] == pytest.approx(45)
+    assert result["forecast"]["SnowMillimeters"] == pytest.approx(12.7, rel=1e-6)
+    assert result["forecast"]["WindGustMph"] == pytest.approx(30 * 0.621371, rel=1e-6)
+    assert result["forecast"]["WindDirectionDegrees"] == pytest.approx(190)

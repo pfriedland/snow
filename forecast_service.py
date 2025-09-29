@@ -26,7 +26,8 @@ def get_forecast():
 
         if not plant_name or longitude is None or latitude is None:
             payload = {
-                "error": "Missing required parameters: plant-prefix, longitude, or latitude"
+                "error": "Missing required parameters: plant-prefix, longitude, or latitude",
+                "http_status_code": 400,
             }
             return Response(
                 json.dumps(payload, indent=2, default=str),
@@ -36,6 +37,7 @@ def get_forecast():
 
         forecast_extractor = ForecastExtractor(plant_name, longitude, latitude)
         forecast_data = forecast_extractor.get_forecast()
+        forecast_data["http_status_code"] = 200
         return Response(
             json.dumps(forecast_data, indent=2, default=str),
             status=200,
@@ -43,7 +45,7 @@ def get_forecast():
         )
 
     except ValueError as exc:
-        payload = {"error": f"Input Error: {exc}"}
+        payload = {"error": f"Input Error: {exc}", "http_status_code": 400}
         return Response(
             json.dumps(payload, indent=2, default=str),
             status=400,
@@ -51,7 +53,7 @@ def get_forecast():
         )
 
     except Exception as exc:  # pragma: no cover - defensive catch for unexpected errors
-        payload = {"error": f"An error occurred: {exc}"}
+        payload = {"error": f"An error occurred: {exc}", "http_status_code": 500}
         return Response(
             json.dumps(payload, indent=2, default=str),
             status=500,
@@ -60,4 +62,4 @@ def get_forecast():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='127.0.0.1', port=5001)

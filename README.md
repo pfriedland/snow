@@ -1,4 +1,4 @@
-# Hail Forecast and GeoJSON Services
+# Snow/Hail Forecasting and GeoJSON Services
 
 This repository bundles two Flask-based microservices:
 
@@ -49,13 +49,17 @@ GET /get-forecast?plant-prefix=MyPlant&longitude=-96.95&latitude=48.38
 **Response**
 
 `forecast_source` points to the NOAA hourly forecast that was simplified.
-`forecast.SnowAccumulationInches` converts NOAA snowfall fields to inches and falls back to gridpoint data when needed.
+`location` reports the city/state (and country) derived from NOAA's relative location metadata.
+`forecast` now includes wind speeds and gusts normalized to MPH, total snow expressed both in inches and millimeters (`SnowMillimeters`), and precipitation percent. NOAA does not publish hail probabilities, so `HailPercent` and `SignificantHailPercent` will be `null`.
+`forecast.SnowAccumulationInches` converts NOAA snowfall fields to inches (and `SnowMillimeters` mirrors the millimeter depth) while falling back to gridpoint data when needed.
+`http_status_code` mirrors the HTTP response so clients can rely on the JSON alone when desired.
 Only the period that covers the current UTC hour is used—`WeatherDataSimplifier` walks the hourly `periods` array and selects the entry whose `startTime <= now < endTime`.
 
 ```json
 {
   "plant": "MyPlant",
   "coordinates": { "latitude": 48.38, "longitude": -96.95 },
+  "location": { "city": "Stephen", "state": "MN", "country": "US" },
   "forecast_source": "https://api.weather.gov/gridpoints/FGF/96,128/forecast/hourly",
   "forecast": {
     "Temperature": 46,
@@ -69,8 +73,16 @@ Only the period that covers the current UTC hour is used—`WeatherDataSimplifie
     "ForecastTimestamp": "2025-09-27T06:00:00-05:00",
     "Hail": false,
     "Snow": false,
-    "SnowAccumulationInches": 0.0
-  }
+    "SnowAccumulationInches": 0.0,
+    "WindSpeedMph": 8.0,
+    "WindGustMph": null,
+    "PrecipitationPercent": 0,
+    "SnowMillimeters": 0.0,
+    "SkyCoverPercent": 45,
+    "HailPercent": null,
+    "SignificantHailPercent": null
+  },
+  "http_status_code": 200
 }
 ```
 
@@ -114,7 +126,7 @@ Lists geometries whose polygon/line contain or intersect the point. If none matc
 ### Forecast Happy Path
 
 1. `GET /get-forecast` reaches `forecast-service.py`, where query params are validated and `ForecastExtractor` is instantiated.
-2. `ForecastExtractor` hits `https://api.weather.gov/points/{lat},{lon}` to discover the relevant NOAA endpoints, then downloads the hourly forecast JSON (and grid data if snowfall inches are missing).
+2. `ForecastExtractor` hits `https://api.weather.gov/points/{lat},{lon}` to discover the relevant NOAA endpoints and capture the city/state metadata, then downloads the hourly forecast JSON (and grid data if snowfall inches are missing).
 3. The raw payload is passed into `WeatherDataSimplifier` (`forecast_transform.py`), which selects the current hour, converts units, decodes wind direction, and adds hail/snow context before returning the slimmed JSON back to the Flask handler.
 
 ### GeoJSON Happy Path
